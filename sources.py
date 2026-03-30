@@ -1,6 +1,5 @@
-# All websites the screener will visit.
+## All websites the screener will visit.
 # method: "firecrawl" = needs JavaScript rendering
-#         "http" = plain page, loads fast
 
 SUBCATEGORIES = [
     "HVAC", "plumbing", "electrical contractor",
@@ -10,10 +9,12 @@ SUBCATEGORIES = [
     "distribution logistics",
 ]
 
+TARGET_STATES = ["California", "Florida", "New Jersey", "New York"]
+
 def get_sources():
     sources = []
 
-    # BizEx — works great with Firecrawl
+    # ── BizEx ──────────────────────────────────────────────
     for s in SUBCATEGORIES:
         sources.append({
             "url": f"https://www.bizex.net/business-for-sale/summary/46?keywords={s}&price_low=1000000&price_high=2000000",
@@ -21,7 +22,7 @@ def get_sources():
             "method": "firecrawl",
         })
 
-    # DealStream
+    # ── DealStream ─────────────────────────────────────────
     for s in SUBCATEGORIES:
         sources.append({
             "url": f"https://dealstream.com/businesses-for-sale?q={s}",
@@ -29,7 +30,7 @@ def get_sources():
             "method": "firecrawl",
         })
 
-    # BizQuest
+    # ── BizQuest ───────────────────────────────────────────
     for s in SUBCATEGORIES:
         sources.append({
             "url": f"https://www.bizquest.com/businesses-for-sale/?q={s}&price_from=1000000&price_to=2000000",
@@ -37,20 +38,81 @@ def get_sources():
             "method": "firecrawl",
         })
 
-    # Transworld Business Advisors
+    # ── BusinessBroker.net — search by state + keyword ────
+    # Confirmed publicly accessible with real listing data
+    state_codes = ["ca", "fl", "nj", "ny"]
+    for state in state_codes:
+        for s in SUBCATEGORIES:
+            sources.append({
+                "url": f"https://www.businessbroker.net/{state}/{s.replace(' ', '-')}-businesses-for-sale.aspx",
+                "source": "BusinessBroker.net",
+                "method": "firecrawl",
+            })
+
+    # ── Murphy Business ────────────────────────────────────
     for s in SUBCATEGORIES:
         sources.append({
-            "url": f"https://www.tworld.com/listings/?search={s}&min_price=1000000&max_price=2000000",
+            "url": f"https://murphybusiness.com/business-brokerage/view-our-listings/?s={s.replace(' ', '+')}",
+            "source": "Murphy Business",
+            "method": "firecrawl",
+        })
+
+    # ── Sunbelt Network — by state ─────────────────────────
+    for state in ["california", "florida", "new-jersey", "new-york"]:
+        sources.append({
+            "url": f"https://www.sunbeltnetwork.com/state/{state}/",
+            "source": "Sunbelt",
+            "method": "firecrawl",
+         })   
+        
+    # ── Transworld ─────────────────────────────────────────
+    for s in SUBCATEGORIES:
+        sources.append({
+            "url": f"https://www.tworld.com/listings/?search={s.replace(' ', '+')}&min_price=1000000&max_price=2000000",
             "source": "Transworld",
             "method": "firecrawl",
         })
-
-    # BusinessesForSale.com
-    for s in SUBCATEGORIES:
+    # ── Synergy Business Brokers ───────────────────────────
+    # Scrape by industry category pages, not the main listing page
+    # (main page is FacetWP filtered, category pages load cleanly)
+    for industry_url in [
+        "https://synergybb.com/industries/service-businesses-for-sale/",
+        "https://synergybb.com/industries/distributors-for-sale/",
+        "https://synergybb.com/industries/construction-companies-for-sale/",
+        "https://synergybb.com/businesses-for-sale/based-on-location/new-york/",
+        "https://synergybb.com/businesses-for-sale/based-on-location/new-jersey/",
+        "https://synergybb.com/businesses-for-sale/based-on-location/california/",
+        "https://synergybb.com/businesses-for-sale/based-on-location/florida/",
+    ]:
         sources.append({
-            "url": f"https://www.businessesforsale.com/search?q={s}&price_from=1000000&price_to=2000000&country=US",
-            "source": "BusinessesForSale",
+            "url": industry_url,
+            "source": "Synergy",
             "method": "firecrawl",
         })
 
+    # ── HedgeStone Business Advisors ──────────────────────
+    # Listings load publicly with asking price and cashflow
+    sources.append({
+        "url": "https://www.hedgestone.com/businesses-for-sale/",
+        "source": "HedgeStone",
+        "method": "firecrawl",
+    })
+    for industry_url in [
+        "https://www.hedgestone.com/service-businesses/",
+        "https://www.hedgestone.com/wholesale-businesses/",
+    ]:
+        sources.append({
+            "url": industry_url,
+            "source": "HedgeStone",
+            "method": "firecrawl",
+        })
+
+    # ── Benjamin Ross Group ────────────────────────────────
+    # HubSpot-powered, worth trying — Firecrawl handles JS
+    sources.append({
+        "url": "https://listings.benjaminrossgroup.com/",
+        "source": "Benjamin Ross Group",
+        "method": "firecrawl",
+    })
+        
     return sources
