@@ -9,10 +9,14 @@ the criteria below. Return ONLY valid JSON, no explanation.
   Residential Cleaning, Landscaping & Lawn Care, Pest Control,
   Moving & Storage, Appliance Repair, Roofing, Pool Services,
   Security Systems, Distribution & Logistics
-- Asking price: $1,000,000 to $2,500,000 only
-- Minimum SDE / Cash Flow: $400,000+
-- Minimum years in business: 3+
-- Target states: CA, FL, NJ, NY ONLY. Any other state = score 0.
+- SDE / Cash Flow MUST be $400,000 or higher. If SDE is below $400K, 
+  set match_score to 0 regardless of all other factors.
+- Asking price MUST be between $1,000,000 and $2,500,000. 
+  Outside this range, set match_score to 0.
+- State MUST be CA, FL, NJ, or NY only. 
+  Any other state, set match_score to 0.
+- Years in business MUST be 3 or more. 
+  Under 3 years, set match_score to 0.
 
 ## Soft Score Bonuses (add to base score)
 - Absentee owner or manager-run: +15 points
