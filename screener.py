@@ -200,7 +200,7 @@ def main():
         if not deal:
             continue
 
-        score = deal.get("match_score", 0)
+        score = deal.get("match_score") or 0
         title = deal.get("title", "").lower().strip()
 
         if score >= 70 and title not in seen_titles and title:
