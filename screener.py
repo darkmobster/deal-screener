@@ -47,15 +47,19 @@ def scrape(source):
 
 def score_listing(text, source_url):
     """Send listing text to Claude and get a score back."""
+    import re
     try:
         msg = claude.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=1000,
+            max_tokens=1500,
             system=BUY_BOX,
-            messages=[{"role": "user", "content": f"Score this listing:\n\n{text}"}],
+            messages=[{"role": "user", "content": f"This page may contain multiple listings. Find the single best matching listing and score only that one.\n\n{text}"}],
         )
         raw = msg.content[0].text
-        match = __import__("re").search(r"\{[\s\S]*\}", raw)
+        # Extract only the first valid JSON object
+        match = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)?\}", raw, re.DOTALL)
+        if not match:
+            match = re.search(r"\{[\s\S]*?\}(?=\s*$|\s*\{)", raw)
         if match:
             result = json.loads(match.group())
             result["listing_url"] = result.get("listing_url") or source_url
