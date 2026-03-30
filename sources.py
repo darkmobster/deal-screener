@@ -40,15 +40,7 @@ def get_sources():
 
     # ── BusinessBroker.net — search by state + keyword ────
     # Confirmed publicly accessible with real listing data
-    state_ids = {"ca": "5", "fl": "9", "nj": "30", "ny": "32"}
-    for state_abbr, state_id in state_ids.items():
-        for s in SUBCATEGORIES:
-            sources.append({
-                "url": f"https://www.businessbroker.net/search/businesses-for-sale.aspx?q={s.replace(' ', '+')}&StateId={state_id}&PriceMin=1000000&PriceMax=2000000",
-                "source": "BusinessBroker.net",
-                "method": "firecrawl",
-            })
-
+  
     # ── Murphy Business ────────────────────────────────────
     for s in SUBCATEGORIES:
         sources.append({
