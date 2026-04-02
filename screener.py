@@ -3,26 +3,28 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 import requests
-from supabase import create_client
+from dotenv import load_dotenv
 from anthropic import Anthropic
 from sources import get_sources
 from urllib.parse import quote_plus
 
+load_dotenv()
+
 # ── Load credentials from environment ──────────────────
-ANTHROPIC_KEY   = os.environ["ANTHROPIC_API_KEY"]
-FIRECRAWL_KEY   = os.environ["FIRECRAWL_API_KEY"]
-SUPABASE_URL    = os.environ["SUPABASE_URL"]
-SUPABASE_KEY    = os.environ["SUPABASE_KEY"]
-GMAIL_USER      = os.environ["GMAIL_USER"]
-GMAIL_PASSWORD  = os.environ["GMAIL_APP_PASSWORD"]
-RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", GMAIL_USER)
+ANTHROPIC_KEY       = os.environ["ANTHROPIC_API_KEY"]
+FIRECRAWL_KEY       = os.environ["FIRECRAWL_API_KEY"]
+AIRTABLE_API_KEY    = os.environ["AIRTABLE_API_KEY"]
+AIRTABLE_BASE_ID    = os.environ["AIRTABLE_BASE_ID"]
+AIRTABLE_TABLE_ID   = os.environ["AIRTABLE_DEALS_TABLE_ID"]
+GMAIL_USER          = os.environ["GMAIL_USER"]
+GMAIL_PASSWORD      = os.environ["GMAIL_APP_PASSWORD"]
+RECIPIENT_EMAIL     = os.environ.get("RECIPIENT_EMAIL", GMAIL_USER)
 
 # ── Load buy-box from CLAUDE.md ─────────────────────────
 BUY_BOX = Path("CLAUDE.md").read_text()
 
 # ── Clients ─────────────────────────────────────────────
-claude   = Anthropic(api_key=ANTHROPIC_KEY)
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+claude = Anthropic(api_key=ANTHROPIC_KEY)
 
 def scrape(source):
     """Fetch a page using Firecrawl and return markdown text."""
@@ -68,24 +70,39 @@ def score_listing(text, source_url):
         print(f"Score error: {e}")
     return None
 
-def save_to_supabase(deal):
-    """Save a deal to the database, skipping duplicates."""
+def save_to_airtable(deal):
+    """Save a deal to Airtable as a new record."""
+    from datetime import date
+    green_flags = deal.get("green_flags", [])
+    red_flags   = deal.get("red_flags", []) + deal.get("mismatches", [])
     try:
-        supabase.table("listings").upsert({
-            "title":        deal.get("title", "Unknown"),
-            "location":     deal.get("location", ""),
-            "state":        deal.get("state", ""),
-            "asking_price": deal.get("asking_price", 0),
-            "sde":          deal.get("sde", 0),
-            "match_score":  deal.get("match_score", 0),
-            "green_flags":  json.dumps(deal.get("green_flags", [])),
-            "red_flags":    json.dumps(deal.get("red_flags", [])),
-            "listing_url":  deal.get("listing_url", ""),
-            "source":       deal.get("source_site", ""),
-            "is_new":       True,
-        }, on_conflict="listing_url").execute()
+        resp = requests.post(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_ID}",
+            headers={
+                "Authorization": f"Bearer {AIRTABLE_API_KEY}",
+                "Content-Type":  "application/json",
+            },
+            json={"fields": {
+                "Deal Name":     deal.get("title", "Unknown"),
+                "Asking Price":  deal.get("asking_price", 0),
+                "SDE":           deal.get("sde", 0),
+                "Industry":      deal.get("industry", ""),
+                "State":         deal.get("state", ""),
+                "Broker Name":   deal.get("broker_name", ""),
+                "Source URL":    deal.get("listing_url", ""),
+                "Match Score":   deal.get("match_score", 0),
+                "Green Flags":   "\n".join(green_flags),
+                "Red Flags":     "\n".join(red_flags),
+                "Status":        "New - Review",
+                "Analysis Run":  False,
+                "Date Found":    date.today().isoformat(),
+            }},
+            timeout=15,
+        )
+        if not resp.ok:
+            print(f"Airtable error {resp.status_code}: {resp.text}")
     except Exception as e:
-        print(f"DB error: {e}")
+        print(f"Airtable error: {e}")
 
 def send_email(deals):
     """Send the digest email."""
@@ -201,12 +218,12 @@ def main():
             continue
 
         score = deal.get("match_score") or 0
-        title = deal.get("title", "").lower().strip()
+        title = (deal.get("title") or "").lower().strip()
 
         if score >= 70 and title not in seen_titles and title:
             seen_titles.add(title)
             matches.append(deal)
-            save_to_supabase(deal)
+            save_to_airtable(deal)
             print(f"  ✓ MATCH: {deal.get('title')} — score {score}")
         else:
             print(f"  — No match (score: {score})")

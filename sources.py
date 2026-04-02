@@ -7,6 +7,8 @@ SUBCATEGORIES = [
     "pest control", "moving storage", "appliance repair",
     "roofing", "pool service", "security systems",
     "distribution logistics",
+    "commercial cleaning",
+    "other",
 ]
 
 TARGET_STATES = ["California", "Florida", "New Jersey", "New York"]

@@ -8,7 +8,8 @@ the criteria below. Return ONLY valid JSON, no explanation.
 - Subcategories: HVAC, Plumbing, Electrical Contractor,
   Residential Cleaning, Landscaping & Lawn Care, Pest Control,
   Moving & Storage, Appliance Repair, Roofing, Pool Services,
-  Security Systems, Distribution & Logistics
+  Security Systems, Distribution & Logistics,
+  Commercial Cleaning, Other
 - SDE / Cash Flow MUST be $400,000 or higher. If SDE is below $400K, 
   set match_score to 0 regardless of all other factors.
 - Asking price MUST be between $1,000,000 and $2,500,000. 
