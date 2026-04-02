@@ -40,6 +40,13 @@ def scrape(source):
             },
             timeout=40,
         )
+        if resp.status_code == 429:
+            print(f"FIRECRAWL CREDIT LIMIT REACHED — stopping scrape.")
+            return ""
+        if not resp.ok:
+            data = resp.json()
+            print(f"Firecrawl error {resp.status_code}: {data.get('error') or data.get('message') or resp.text[:200]}")
+            return ""
         data = resp.json()
         text = data.get("data", {}).get("markdown", "")
         return text[:4000] if len(text) > 100 else ""
