@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(pip install:*)",
+      "Bash(mv:*)"
+    ]
+  }
+}
