@@ -1,5 +1,12 @@
 ## All websites the screener will visit.
 # method: "firecrawl" = needs JavaScript rendering
+#
+# Filter strategy:
+#   - Large platforms (BizQuest, Transworld, DealStream): URL params for
+#     subcategory + price range baked into every request.
+#   - Sunbelt / Morgan & Westfield: state-level URL params.
+#   - Regional broker sites: listing pages are already state-scoped; no URL
+#     filter params available — buy-box screening happens at the AI stage.
 
 SUBCATEGORIES = [
     "HVAC", "plumbing", "electrical contractor",
@@ -13,18 +20,11 @@ SUBCATEGORIES = [
 
 TARGET_STATES = ["California", "Florida", "New Jersey", "New York"]
 
+
 def get_sources():
     sources = []
 
-    # ── BizEx ──────────────────────────────────────────────
-    for s in SUBCATEGORIES:
-        sources.append({
-            "url": f"https://www.bizex.net/business-for-sale/summary/46?keywords={s}&price_low=1000000&price_high=2000000",
-            "source": "BizEx",
-            "method": "firecrawl",
-        })
-
-    # ── DealStream ─────────────────────────────────────────
+    # ── DealStream ─────────────────────────────────────────────────────────────
     for s in SUBCATEGORIES:
         sources.append({
             "url": f"https://dealstream.com/businesses-for-sale?q={s}",
@@ -32,81 +32,91 @@ def get_sources():
             "method": "firecrawl",
         })
 
-    # ── BizQuest ───────────────────────────────────────────
+    # ── BizQuest ───────────────────────────────────────────────────────────────
+    # Filters: subcategory keyword + price $1M–$2.5M
     for s in SUBCATEGORIES:
         sources.append({
-            "url": f"https://www.bizquest.com/businesses-for-sale/?q={s}&price_from=1000000&price_to=2000000",
+            "url": (
+                f"https://www.bizquest.com/businesses-for-sale/"
+                f"?q={s}&price_from=1000000&price_to=2500000"
+            ),
             "source": "BizQuest",
             "method": "firecrawl",
         })
 
-    # ── BusinessBroker.net — search by state + keyword ────
-    # Confirmed publicly accessible with real listing data
-  
-    # ── Murphy Business ────────────────────────────────────
-    for s in SUBCATEGORIES:
-        sources.append({
-            "url": f"https://murphybusiness.com/business-brokerage/view-our-listings/?s={s.replace(' ', '+')}",
-            "source": "Murphy Business",
-            "method": "firecrawl",
-        })
-
-    # ── Sunbelt Network — by state ─────────────────────────
+    # ── Sunbelt Network — by state ─────────────────────────────────────────────
     for state in ["california", "florida", "new-jersey", "new-york"]:
         sources.append({
             "url": f"https://www.sunbeltnetwork.com/state/{state}/",
             "source": "Sunbelt",
             "method": "firecrawl",
-         })   
-        
-    # ── Transworld ─────────────────────────────────────────
+        })
+
+    # ── Transworld ────────────────────────────────────────────────────────────
+    # Filters: subcategory keyword + price $1M–$2.5M
     for s in SUBCATEGORIES:
         sources.append({
-            "url": f"https://www.tworld.com/listings/?search={s.replace(' ', '+')}&min_price=1000000&max_price=2000000",
+            "url": (
+                f"https://www.tworld.com/listings/"
+                f"?search={s.replace(' ', '+')}&min_price=1000000&max_price=2500000"
+            ),
             "source": "Transworld",
             "method": "firecrawl",
         })
-    # ── Synergy Business Brokers ───────────────────────────
-    # Scrape by industry category pages, not the main listing page
-    # (main page is FacetWP filtered, category pages load cleanly)
-    for industry_url in [
-        "https://synergybb.com/industries/service-businesses-for-sale/",
-        "https://synergybb.com/industries/distributors-for-sale/",
-        "https://synergybb.com/industries/construction-companies-for-sale/",
-        "https://synergybb.com/businesses-for-sale/based-on-location/new-york/",
-        "https://synergybb.com/businesses-for-sale/based-on-location/new-jersey/",
-        "https://synergybb.com/businesses-for-sale/based-on-location/california/",
-        "https://synergybb.com/businesses-for-sale/based-on-location/florida/",
-    ]:
+
+    # ── Morgan & Westfield — national, filtered by target state ───────────────
+    for state in ["california", "florida", "new-jersey", "new-york"]:
         sources.append({
-            "url": industry_url,
-            "source": "Synergy",
+            "url": f"https://morganandwestfield.com/buy/businesses-for-sale/?state={state}",
+            "source": "MorganAndWestfield",
             "method": "firecrawl",
         })
 
-    # ── HedgeStone Business Advisors ──────────────────────
-    # Listings load publicly with asking price and cashflow
-    sources.append({
-        "url": "https://www.hedgestone.com/businesses-for-sale/",
-        "source": "HedgeStone",
-        "method": "firecrawl",
-    })
-    for industry_url in [
-        "https://www.hedgestone.com/service-businesses/",
-        "https://www.hedgestone.com/wholesale-businesses/",
+    # ── New York brokers ───────────────────────────────────────────────────────
+    for url, source in [
+        ("https://thenybbgroup.com/businesses-for-sale/",             "TheNYBBGroup"),
+        ("https://inbargroup.com/businesses-for-sale/",               "InbarGroup"),
+        ("https://vestedbb.com/businesses-for-sale/",                 "VestedBB"),
+        ("https://businessesforsaleinnewyorkcity.com/businesses-for-sale/", "FCBBNewYorkCity"),
     ]:
-        sources.append({
-            "url": industry_url,
-            "source": "HedgeStone",
-            "method": "firecrawl",
-        })
+        sources.append({"url": url, "source": source, "method": "firecrawl"})
 
-    # ── Benjamin Ross Group ────────────────────────────────
-    # HubSpot-powered, worth trying — Firecrawl handles JS
-    sources.append({
-        "url": "https://listings.benjaminrossgroup.com/",
-        "source": "Benjamin Ross Group",
-        "method": "firecrawl",
-    })
-        
+    # ── New Jersey brokers ────────────────────────────────────────────────────
+    # njbrokerplus + acquisitionexperts are pre-filtered to $1M+ listings
+    for url, source in [
+        ("https://inbargroup.com/new-jersey-business-brokers/",       "InbarGroup-NJ"),
+        ("https://njbrokerplus.com/listings-over-one-million/",       "NJBrokerPlus"),
+        ("https://murraybizbuy.com",                                   "MurrayBizBuy"),
+        ("https://atlanticbusinessbroker.com/our-business-for-sale-listings", "AtlanticBizBroker"),
+    ]:
+        sources.append({"url": url, "source": source, "method": "firecrawl"})
+
+    # ── Florida brokers ───────────────────────────────────────────────────────
+    # acquisitionexperts pre-filtered to $1M+ listings
+    for url, source in [
+        ("https://www.floridama.com/listings/",                        "FloridaMA"),
+        ("https://kmfbusinessadvisors.dealrelations.com/listings",     "KMFBusinessAdvisors"),
+        ("https://acquisitionexperts.net/million-dollar-plus-business-listings/", "AcquisitionExperts"),
+    ]:
+        sources.append({"url": url, "source": source, "method": "firecrawl"})
+
+    # ── California brokers ────────────────────────────────────────────────────
+    for url, source in [
+        ("https://californiabusinessbrokers.com/for-sale-2/",          "CalBizBrokers"),
+        ("https://thebusinessbrokerslosangeles.com",                   "BizBrokersLA"),
+        ("https://zoombusinessbrokers.com",                            "ZoomBizBrokers"),
+        ("https://exitstrategiesgroup.com",                            "ExitStrategiesGroup"),
+    ]:
+        sources.append({"url": url, "source": source, "method": "firecrawl"})
+
+    # ── Massachusetts brokers (multi-state — AI screening enforces state filter)
+    for url, source in [
+        ("https://inbargroup.com/boston-business-broker/",             "InbarGroup-Boston"),
+        ("https://boston.fcbb.com/businesses-for-sale",                "FCBBBoston"),
+        ("https://baystatebusinessbrokers.com",                        "BayStateBizBrokers"),
+        ("https://goodmanonline.com",                                  "GoodmanAndCompany"),
+        ("https://georgeandco.com",                                    "GeorgeAndCompany"),
+    ]:
+        sources.append({"url": url, "source": source, "method": "firecrawl"})
+
     return sources
