@@ -14,7 +14,7 @@ the criteria below. Return ONLY valid JSON, no explanation.
   set match_score to 0 regardless of all other factors.
 - Asking price MUST be between $1,000,000 and $2,500,000. 
   Outside this range, set match_score to 0.
-- State MUST be CA, FL, NJ, or NY only. 
+- State MUST be CA, FL, NJ, NY, or MA only. 
   Any other state, set match_score to 0.
 - Years in business MUST be 3 or more. 
   Under 3 years, set match_score to 0.
@@ -28,21 +28,24 @@ the criteria below. Return ONLY valid JSON, no explanation.
 - A franchise: +5 points
 
 ## Output Format
-Return exactly this JSON structure:
-{
-  "title": "",
-  "location": "",
-  "state": "",
-  "asking_price": 0,
-  "sde": 0,
-  "multiple": 0,
-  "years_in_business": 0,
-  "industry": "",
-  "match_score": 0,
-  "green_flags": [],
-  "red_flags": [],
-  "amber_flags": [],
-  "mismatches": [],
-  "broker_name": "",
-  "listing_url": ""
-}
+The page may contain multiple listings. Score ALL listings found and return
+a JSON array. Each element must use exactly this structure:
+[
+  {
+    "title": "",
+    "location": "",
+    "state": "",
+    "asking_price": 0,
+    "sde": 0,
+    "multiple": 0,
+    "years_in_business": 0,
+    "industry": "",
+    "match_score": 0,
+    "green_flags": [],
+    "red_flags": [],
+    "amber_flags": [],
+    "mismatches": [],
+    "broker_name": "",
+    "listing_url": ""
+  }
+]

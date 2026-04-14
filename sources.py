@@ -18,7 +18,7 @@ SUBCATEGORIES = [
     "other",
 ]
 
-TARGET_STATES = ["California", "Florida", "New Jersey", "New York"]
+TARGET_STATES = ["California", "Florida", "New Jersey", "New York", "Massachusetts"]
 
 
 def get_sources():

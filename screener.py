@@ -49,33 +49,32 @@ def scrape(source):
             return ""
         data = resp.json()
         text = data.get("data", {}).get("markdown", "")
-        return text[:4000] if len(text) > 100 else ""
+        return text[:20000] if len(text) > 100 else ""
     except Exception as e:
         print(f"Scrape error {source['url']}: {e}")
         return ""
 
-def score_listing(text, source_url):
-    """Send listing text to Claude and get a score back."""
+def score_listings(text, source_url):
+    """Send listing text to Claude and get scores for all listings on the page."""
     import re
     try:
         msg = claude.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=1500,
+            max_tokens=8000,
             system=BUY_BOX,
-            messages=[{"role": "user", "content": f"This page may contain multiple listings. Find the single best matching listing and score only that one.\n\n{text}"}],
+            messages=[{"role": "user", "content": f"Score every listing found on this page.\n\n{text}"}],
         )
         raw = msg.content[0].text
-        # Extract only the first valid JSON object
-        match = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)?\}", raw, re.DOTALL)
-        if not match:
-            match = re.search(r"\{[\s\S]*?\}(?=\s*$|\s*\{)", raw)
+        # Extract a JSON array
+        match = re.search(r"\[[\s\S]*\]", raw)
         if match:
-            result = json.loads(match.group())
-            result["listing_url"] = result.get("listing_url") or source_url
-            return result
+            results = json.loads(match.group())
+            for r in results:
+                r["listing_url"] = r.get("listing_url") or source_url
+            return results
     except Exception as e:
         print(f"Score error: {e}")
-    return None
+    return []
 
 def save_to_airtable(deal):
     """Save a deal to Airtable as a new record."""
@@ -220,20 +219,22 @@ def main():
         if not text:
             continue
 
-        deal = score_listing(text, source["url"])
-        if not deal:
+        deals = score_listings(text, source["url"])
+        if not deals:
+            print(f"  — No listings parsed")
             continue
 
-        score = deal.get("match_score") or 0
-        title = (deal.get("title") or "").lower().strip()
+        for deal in deals:
+            score = deal.get("match_score") or 0
+            title = (deal.get("title") or "").lower().strip()
 
-        if score >= 70 and title not in seen_titles and title:
-            seen_titles.add(title)
-            matches.append(deal)
-            save_to_airtable(deal)
-            print(f"  ✓ MATCH: {deal.get('title')} — score {score}")
-        else:
-            print(f"  — No match (score: {score})")
+            if score >= 70 and title not in seen_titles and title:
+                seen_titles.add(title)
+                matches.append(deal)
+                save_to_airtable(deal)
+                print(f"  ✓ MATCH: {deal.get('title')} — score {score}")
+            else:
+                print(f"  — No match: {deal.get('title', 'unknown')} (score: {score})")
 
         time.sleep(5)  # be polite to Firecrawl's free tier
 
