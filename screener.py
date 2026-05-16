@@ -4,14 +4,14 @@ from email.mime.text import MIMEText
 from pathlib import Path
 import requests
 from dotenv import load_dotenv
-from openai import OpenAI
 from sources import get_sources
 from urllib.parse import quote_plus
 
 load_dotenv()
 
 # ── Load credentials from environment ──────────────────
-OPENAI_KEY          = os.environ["OPENAI_API_KEY"]
+GITHUB_TOKEN        = os.environ.get("GITHUB_TOKEN")
+GITHUB_MODEL        = os.environ.get("GITHUB_MODEL", "openai/gpt-4.1")
 FIRECRAWL_KEY       = os.environ["FIRECRAWL_API_KEY"]
 AIRTABLE_API_KEY    = os.environ["AIRTABLE_API_KEY"]
 AIRTABLE_BASE_ID    = os.environ["AIRTABLE_BASE_ID"]
@@ -22,9 +22,6 @@ RECIPIENT_EMAIL     = os.environ.get("RECIPIENT_EMAIL", GMAIL_USER)
 
 # ── Load buy-box from CLAUDE.md ─────────────────────────
 BUY_BOX = Path("CLAUDE.md").read_text()
-
-# ── Clients ─────────────────────────────────────────────
-openai_client = OpenAI(api_key=OPENAI_KEY)
 
 def scrape(source):
     """Fetch a page using Firecrawl and return markdown text."""
@@ -55,19 +52,36 @@ def scrape(source):
         return ""
 
 def score_listings(text, source_url):
-    """Send listing text to GPT-4.1 mini and get scores for all listings on the page."""
+    """Send listing text to GitHub Models and get scores for all listings on the page."""
     import re
     try:
-        resp = openai_client.chat.completions.create(
-            model="gpt-4.1-mini",
-            max_tokens=8000,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": BUY_BOX},
-                {"role": "user", "content": f"Score every listing found on this page. Return a JSON object with a 'listings' array.\n\n{text}"},
-            ],
+        if not GITHUB_TOKEN:
+            raise RuntimeError("GITHUB_TOKEN is required for GitHub Models inference.")
+
+        resp = requests.post(
+            "https://models.github.ai/inference/chat/completions",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {GITHUB_TOKEN}",
+                "Content-Type": "application/json",
+                "X-GitHub-Api-Version": "2026-03-10",
+            },
+            json={
+                "model": GITHUB_MODEL,
+                "max_tokens": 8000,
+                "response_format": {"type": "json_object"},
+                "messages": [
+                    {"role": "system", "content": BUY_BOX},
+                    {"role": "user", "content": f"Score every listing found on this page. Return a JSON object with a 'listings' array.\n\n{text}"},
+                ],
+            },
+            timeout=90,
         )
-        raw = resp.choices[0].message.content
+        if not resp.ok:
+            print(f"GitHub Models error {resp.status_code}: {resp.text[:500]}")
+            return []
+
+        raw = resp.json()["choices"][0]["message"]["content"]
         parsed = json.loads(raw)
         results = parsed.get("listings") if isinstance(parsed, dict) else parsed
         if not isinstance(results, list):
