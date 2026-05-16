@@ -4,14 +4,14 @@ from email.mime.text import MIMEText
 from pathlib import Path
 import requests
 from dotenv import load_dotenv
-from anthropic import Anthropic
+from openai import OpenAI
 from sources import get_sources
 from urllib.parse import quote_plus
 
 load_dotenv()
 
 # ── Load credentials from environment ──────────────────
-ANTHROPIC_KEY       = os.environ["ANTHROPIC_API_KEY"]
+OPENAI_KEY          = os.environ["OPENAI_API_KEY"]
 FIRECRAWL_KEY       = os.environ["FIRECRAWL_API_KEY"]
 AIRTABLE_API_KEY    = os.environ["AIRTABLE_API_KEY"]
 AIRTABLE_BASE_ID    = os.environ["AIRTABLE_BASE_ID"]
@@ -24,7 +24,7 @@ RECIPIENT_EMAIL     = os.environ.get("RECIPIENT_EMAIL", GMAIL_USER)
 BUY_BOX = Path("CLAUDE.md").read_text()
 
 # ── Clients ─────────────────────────────────────────────
-claude = Anthropic(api_key=ANTHROPIC_KEY)
+openai_client = OpenAI(api_key=OPENAI_KEY)
 
 def scrape(source):
     """Fetch a page using Firecrawl and return markdown text."""
@@ -55,23 +55,27 @@ def scrape(source):
         return ""
 
 def score_listings(text, source_url):
-    """Send listing text to Claude and get scores for all listings on the page."""
+    """Send listing text to GPT-4.1 mini and get scores for all listings on the page."""
     import re
     try:
-        msg = claude.messages.create(
-            model="claude-haiku-4-5-20251001",
+        resp = openai_client.chat.completions.create(
+            model="gpt-4.1-mini",
             max_tokens=8000,
-            system=BUY_BOX,
-            messages=[{"role": "user", "content": f"Score every listing found on this page.\n\n{text}"}],
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": BUY_BOX},
+                {"role": "user", "content": f"Score every listing found on this page. Return a JSON object with a 'listings' array.\n\n{text}"},
+            ],
         )
-        raw = msg.content[0].text
-        # Extract a JSON array
-        match = re.search(r"\[[\s\S]*\]", raw)
-        if match:
-            results = json.loads(match.group())
-            for r in results:
-                r["listing_url"] = r.get("listing_url") or source_url
-            return results
+        raw = resp.choices[0].message.content
+        parsed = json.loads(raw)
+        results = parsed.get("listings") if isinstance(parsed, dict) else parsed
+        if not isinstance(results, list):
+            match = re.search(r"\[[\s\S]*\]", raw)
+            results = json.loads(match.group()) if match else []
+        for r in results:
+            r["listing_url"] = r.get("listing_url") or source_url
+        return results
     except Exception as e:
         print(f"Score error: {e}")
     return []

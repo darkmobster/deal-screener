@@ -13,10 +13,10 @@ HEADERS  = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/j
 # ── Create dummy record ──────────────────────────────────
 print("Creating dummy record...")
 payload = {"fields": {
-    "Deal Name":    "TEST - Dummy HVAC Company",
+    "Deal Name":    "TEST - Dummy Pest Control Company",
     "Asking Price": 1500000,
     "SDE":          450000,
-    "Industry":     "HVAC",
+    "Industry":     "Pest Control",
     "State":        "FL",
     "Source URL":   "https://example.com/test-listing",
     "Match Score":  85,

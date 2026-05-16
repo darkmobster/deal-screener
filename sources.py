@@ -9,13 +9,20 @@
 #     filter params available — buy-box screening happens at the AI stage.
 
 SUBCATEGORIES = [
-    "HVAC", "plumbing", "electrical contractor",
-    "residential cleaning", "landscaping lawn care",
-    "pest control", "moving storage", "appliance repair",
-    "roofing", "pool service", "security systems",
-    "distribution logistics",
+    "home inspection",
+    "residential cleaning",
     "commercial cleaning",
-    "other",
+    "pest control",
+    "moving storage",
+    "appliance repair",
+    "roofing",
+    "pool service",
+    "security systems",
+    "distribution logistics",
+    "gym",
+    "fitness center",
+    "bathhouse",
+    "sauna",
 ]
 
 TARGET_STATES = ["California", "Florida", "New Jersey", "New York", "Massachusetts"]
