@@ -28,11 +28,11 @@ TARGET_CATEGORY_TERMS = [
     "home inspection", "residential cleaning", "commercial cleaning",
     "pest control", "moving", "storage", "appliance repair", "roofing",
     "pool service", "security systems", "distribution", "logistics",
-    "gym", "fitness center", "bathhouse", "sauna",
+    "gym", "fitness center", "health club", "bathhouse", "sauna",
 ]
 
-TARGET_STATE_NAMES = ["california", "florida", "new jersey", "new york", "massachusetts"]
-TARGET_STATE_ABBRS = ["CA", "FL", "NJ", "NY", "MA"]
+TARGET_STATE_NAMES = ["california", "new jersey", "new york", "massachusetts", "virginia", "texas"]
+TARGET_STATE_ABBRS = ["CA", "NJ", "NY", "MA", "VA", "TX"]
 FINANCIAL_TERMS = [
     "$", "asking", "price", "cash flow", "sde", "seller discretionary",
     "ebitda", "revenue", "gross sales",
