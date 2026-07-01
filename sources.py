@@ -21,11 +21,13 @@ SUBCATEGORIES = [
     "distribution logistics",
     "gym",
     "fitness center",
+    "health club",
     "bathhouse",
     "sauna",
 ]
 
-TARGET_STATES = ["California", "Florida", "New Jersey", "New York", "Massachusetts"]
+TARGET_STATES = ["California", "New Jersey", "New York", "Massachusetts", "Virginia", "Texas"]
+STATE_SLUGS = ["california", "new-jersey", "new-york", "massachusetts", "virginia", "texas"]
 
 
 def get_sources():
@@ -42,19 +44,19 @@ def get_sources():
         })
 
     # ── BizQuest ───────────────────────────────────────────────────────────────
-    # Filters: subcategory keyword + price $1M–$2.5M
+    # Filters: subcategory keyword + price $1M–$5M
     for s in SUBCATEGORIES:
         sources.append({
             "url": (
                 f"https://www.bizquest.com/businesses-for-sale/"
-                f"?q={s}&price_from=1000000&price_to=2500000"
+                f"?q={s}&price_from=1000000&price_to=5000000"
             ),
             "source": "BizQuest",
             "method": "firecrawl",
         })
 
     # ── Sunbelt Network — by state ─────────────────────────────────────────────
-    for state in ["california", "florida", "new-jersey", "new-york"]:
+    for state in STATE_SLUGS:
         sources.append({
             "url": f"https://www.sunbeltnetwork.com/state/{state}/",
             "source": "Sunbelt",
@@ -62,24 +64,33 @@ def get_sources():
         })
 
     # ── Transworld ────────────────────────────────────────────────────────────
-    # Filters: subcategory keyword + price $1M–$2.5M
+    # Filters: subcategory keyword + price $1M–$5M
     for s in SUBCATEGORIES:
         sources.append({
             "url": (
                 f"https://www.tworld.com/listings/"
-                f"?search={s.replace(' ', '+')}&min_price=1000000&max_price=2500000"
+                f"?search={s.replace(' ', '+')}&min_price=1000000&max_price=5000000"
             ),
             "source": "Transworld",
             "method": "firecrawl",
         })
 
     # ── Morgan & Westfield — national, filtered by target state ───────────────
-    for state in ["california", "florida", "new-jersey", "new-york"]:
+    for state in STATE_SLUGS:
         sources.append({
             "url": f"https://morganandwestfield.com/buy/businesses-for-sale/?state={state}",
             "source": "MorganAndWestfield",
             "method": "firecrawl",
         })
+
+    # ── Rejigg — industry pages with embedded listing summaries ───────────────
+    for url, source in [
+        ("https://www.rejigg.com/for-sale/home-and-facility-services", "Rejigg-HomeFacilityServices"),
+        ("https://www.rejigg.com/for-sale/logistics-transportation",   "Rejigg-LogisticsTransportation"),
+        ("https://www.rejigg.com/for-sale/consumer-services",          "Rejigg-ConsumerServices"),
+        ("https://www.rejigg.com/for-sale/healthcare",                 "Rejigg-Healthcare"),
+    ]:
+        sources.append({"url": url, "source": source, "method": "firecrawl"})
 
     # ── New York brokers ───────────────────────────────────────────────────────
     for url, source in [
@@ -91,21 +102,12 @@ def get_sources():
         sources.append({"url": url, "source": source, "method": "firecrawl"})
 
     # ── New Jersey brokers ────────────────────────────────────────────────────
-    # njbrokerplus + acquisitionexperts are pre-filtered to $1M+ listings
+    # njbrokerplus listings are pre-filtered to $1M+ listings
     for url, source in [
         ("https://inbargroup.com/new-jersey-business-brokers/",       "InbarGroup-NJ"),
         ("https://njbrokerplus.com/listings-over-one-million/",       "NJBrokerPlus"),
-        ("https://murraybizbuy.com",                                   "MurrayBizBuy"),
+        ("https://murraybizbuy.com",                                  "MurrayBizBuy"),
         ("https://atlanticbusinessbroker.com/our-business-for-sale-listings", "AtlanticBizBroker"),
-    ]:
-        sources.append({"url": url, "source": source, "method": "firecrawl"})
-
-    # ── Florida brokers ───────────────────────────────────────────────────────
-    # acquisitionexperts pre-filtered to $1M+ listings
-    for url, source in [
-        ("https://www.floridama.com/listings/",                        "FloridaMA"),
-        ("https://kmfbusinessadvisors.dealrelations.com/listings",     "KMFBusinessAdvisors"),
-        ("https://acquisitionexperts.net/million-dollar-plus-business-listings/", "AcquisitionExperts"),
     ]:
         sources.append({"url": url, "source": source, "method": "firecrawl"})
 
