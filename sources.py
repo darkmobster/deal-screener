@@ -33,6 +33,8 @@ def get_sources():
 
     # ── DealStream ─────────────────────────────────────────────────────────────
     for s in SUBCATEGORIES:
+        if s == "moving storage":
+            continue
         sources.append({
             "url": f"https://dealstream.com/businesses-for-sale?q={s}",
             "source": "DealStream",
