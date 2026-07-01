@@ -8,15 +8,15 @@ the criteria below. Return ONLY valid JSON, no explanation.
 - Subcategories: Home Inspection, Residential Cleaning, Commercial Cleaning,
   Pest Control, Moving & Storage, Appliance Repair, Roofing, Pool Services,
   Security Systems, Distribution & Logistics, Gym, Fitness Center,
-  Bathhouse, Sauna/Spa Bathhouse
+  Health Club, Bathhouse, Sauna/Spa Bathhouse
 - Excluded categories: HVAC, Electrical Contractor, Plumbing,
   Landscaping & Lawn Care, and unrelated Other businesses.
   If a listing is primarily in an excluded category, set match_score to 0.
 - SDE / Cash Flow MUST be $400,000 or higher. If SDE is below $400K, 
   set match_score to 0 regardless of all other factors.
-- Asking price MUST be between $1,000,000 and $2,500,000. 
+- Asking price MUST be between $1,000,000 and $5,000,000. 
   Outside this range, set match_score to 0.
-- State MUST be CA, FL, NJ, NY, or MA only. 
+- State MUST be CA, NJ, NY, MA, VA, or TX only. 
   Any other state, set match_score to 0.
 - Years in business MUST be 3 or more. 
   Under 3 years, set match_score to 0.
