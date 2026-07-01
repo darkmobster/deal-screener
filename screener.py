@@ -1,4 +1,5 @@
-import os, json, time, smtplib
+import os, json, re, time, smtplib
+from datetime import date
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -22,6 +23,69 @@ RECIPIENT_EMAIL     = os.environ.get("RECIPIENT_EMAIL", GMAIL_USER)
 
 # ── Load buy-box from CLAUDE.md ─────────────────────────
 BUY_BOX = Path("CLAUDE.md").read_text()
+
+TARGET_CATEGORY_TERMS = [
+    "home inspection", "residential cleaning", "commercial cleaning",
+    "pest control", "moving", "storage", "appliance repair", "roofing",
+    "pool service", "security systems", "distribution", "logistics",
+    "gym", "fitness center", "bathhouse", "sauna",
+]
+
+TARGET_STATE_NAMES = ["california", "florida", "new jersey", "new york", "massachusetts"]
+TARGET_STATE_ABBRS = ["CA", "FL", "NJ", "NY", "MA"]
+FINANCIAL_TERMS = [
+    "$", "asking", "price", "cash flow", "sde", "seller discretionary",
+    "ebitda", "revenue", "gross sales",
+]
+
+
+class ModelRateLimitError(Exception):
+    def __init__(self, retry_after=None):
+        self.retry_after = retry_after
+        super().__init__("GitHub Models rate limit reached")
+
+
+def has_state_signal(text):
+    lower = text.lower()
+    if any(state in lower for state in TARGET_STATE_NAMES):
+        return True
+    return any(re.search(rf"\b{abbr}\b", text, re.IGNORECASE) for abbr in TARGET_STATE_ABBRS)
+
+
+def should_score_source(text, source):
+    haystack = f"{source.get('url', '')} {text}"
+    lower = haystack.lower()
+    missing = []
+    if not any(term in lower for term in TARGET_CATEGORY_TERMS):
+        missing.append("target category")
+    if not has_state_signal(haystack):
+        missing.append("target state")
+    if not any(term in lower for term in FINANCIAL_TERMS):
+        missing.append("financial signal")
+    if missing:
+        print(f"  — Skipping model scoring; prefilter missing {', '.join(missing)}")
+        return False
+    return True
+
+
+def select_sources_for_run(sources):
+    total_shards = int(os.environ.get("SOURCE_SHARDS", "3"))
+    if total_shards <= 1:
+        return sources
+
+    explicit_shard = os.environ.get("SOURCE_SHARD")
+    if explicit_shard is not None:
+        shard = int(explicit_shard)
+    else:
+        weekday_to_shard = {0: 0, 2: 1, 4: 2}
+        today = date.today()
+        shard = weekday_to_shard.get(today.weekday(), today.toordinal())
+
+    shard = shard % total_shards
+    selected = [source for i, source in enumerate(sources) if i % total_shards == shard]
+    print(f"Source rotation: shard {shard + 1}/{total_shards}; checking {len(selected)} of {len(sources)} sources.")
+    return selected
+
 
 def scrape(source):
     """Fetch a page using Firecrawl and return markdown text."""
@@ -51,9 +115,9 @@ def scrape(source):
         print(f"Scrape error {source['url']}: {e}")
         return ""
 
+
 def score_listings(text, source_url):
     """Send listing text to GitHub Models and get scores for all listings on the page."""
-    import re
     try:
         if not GITHUB_TOKEN:
             raise RuntimeError("GITHUB_TOKEN is required for GitHub Models inference.")
@@ -77,6 +141,8 @@ def score_listings(text, source_url):
             },
             timeout=90,
         )
+        if resp.status_code == 429:
+            raise ModelRateLimitError(resp.headers.get("Retry-After"))
         if not resp.ok:
             print(f"GitHub Models error {resp.status_code}: {resp.text[:500]}")
             return []
@@ -90,13 +156,15 @@ def score_listings(text, source_url):
         for r in results:
             r["listing_url"] = r.get("listing_url") or source_url
         return results
+    except ModelRateLimitError:
+        raise
     except Exception as e:
         print(f"Score error: {e}")
     return []
 
+
 def save_to_airtable(deal):
     """Save a deal to Airtable as a new record."""
-    from datetime import date
     green_flags = deal.get("green_flags", [])
     red_flags   = deal.get("red_flags", []) + deal.get("mismatches", [])
     try:
@@ -128,9 +196,9 @@ def save_to_airtable(deal):
     except Exception as e:
         print(f"Airtable error: {e}")
 
+
 def send_email(deals):
     """Send the digest email."""
-    from datetime import date
     today = date.today().strftime("%B %d, %Y")
     subject = f"Deal Screener: {len(deals)} new matches today" if deals else "Deal Screener: No matches today"
 
@@ -225,8 +293,10 @@ def send_email(deals):
         server.sendmail(GMAIL_USER, RECIPIENT_EMAIL, msg.as_string())
     print(f"Email sent: {subject}")
 
+
 def main():
-    sources = get_sources()
+    all_sources = get_sources()
+    sources = select_sources_for_run(all_sources)
     print(f"Checking {len(sources)} sources...")
     matches = []
     seen_titles = set()
@@ -236,8 +306,17 @@ def main():
         text = scrape(source)
         if not text:
             continue
+        if not should_score_source(text, source):
+            continue
 
-        deals = score_listings(text, source["url"])
+        try:
+            deals = score_listings(text, source["url"])
+        except ModelRateLimitError as e:
+            msg = "GitHub Models rate limit reached"
+            if e.retry_after:
+                msg += f"; retry after {e.retry_after} seconds"
+            print(f"  — {msg}. Stopping remaining source checks cleanly.")
+            break
         if not deals:
             print(f"  — No listings parsed")
             continue
