@@ -1,53 +1,26 @@
-# Deal Screener — Buy-Box Instructions
+# DealOS acquisition buy box
 
-You are a business acquisition analyst. Score each listing against
-the criteria below. Return ONLY valid JSON, no explanation.
+The GitHub collector performs inexpensive page and inbox prefiltering. DealOS
+uses its centrally configured screening model for structured extraction and
+applies these rules:
 
-## Hard Filters (automatic 0 if any fail)
-- Industries: Commercial Services OR Home Services OR Distribution & Logistics OR Fitness & Wellness
-- Subcategories: Home Inspection, Residential Cleaning, Commercial Cleaning,
-  Pest Control, Moving & Storage, Appliance Repair, Roofing, Pool Services,
-  Security Systems, Distribution & Logistics, Gym, Fitness Center,
-  Health Club, Bathhouse, Sauna/Spa Bathhouse
-- Excluded categories: HVAC, Electrical Contractor, Plumbing,
-  Landscaping & Lawn Care, and unrelated Other businesses.
-  If a listing is primarily in an excluded category, set match_score to 0.
-- SDE / Cash Flow MUST be $400,000 or higher. If SDE is below $400K, 
-  set match_score to 0 regardless of all other factors.
-- Asking price MUST be between $1,000,000 and $5,000,000. 
-  Outside this range, set match_score to 0.
-- State MUST be CA, NJ, NY, MA, VA, or TX only. 
-  Any other state, set match_score to 0.
-- Years in business MUST be 3 or more. 
-  Under 3 years, set match_score to 0.
+- SDE: $500,000 to $2,000,000.
+- Revenue: $500,000 to $20,000,000.
+- Asking price: $250,000 to $7,000,000.
+- Minimum DSCR: 1.25.
+- Target states: NJ, NY, CT, MA, MD, and CA.
+- Preferred: home services, cleaning, pest control, window cleaning, power
+  washing, home appraisal, restoration, light manufacturing, gyms, fitness,
+  and other service businesses.
+- Excluded: restaurants, gas stations, heavy manufacturing, roofing,
+  electrical, HVAC, and plumbing.
+- Green flags: recurring or contracted revenue, management in place, low
+  customer concentration, and at least five years in business.
+- Red flags: customer concentration above 40%, near-term asset replacement,
+  and owner-dependent sales.
+- Deal breakers: unverifiable cash flow, litigation, buyer-inaccessible
+  licensing, and key-man risk where the owner is the business.
 
-## Soft Score Bonuses (add to base score)
-- Absentee owner or manager-run: +15 points
-- Real estate included: +10 points
-- Seller financing available: +10 points
-- B2B customer base: +12 points
-- Employee count documented: +8 points
-- A franchise: +5 points
-
-## Output Format
-The page may contain multiple listings. Score ALL listings found and return
-a JSON array. Each element must use exactly this structure:
-[
-  {
-    "title": "",
-    "location": "",
-    "state": "",
-    "asking_price": 0,
-    "sde": 0,
-    "multiple": 0,
-    "years_in_business": 0,
-    "industry": "",
-    "match_score": 0,
-    "green_flags": [],
-    "red_flags": [],
-    "amber_flags": [],
-    "mismatches": [],
-    "broker_name": "",
-    "listing_url": ""
-  }
-]
+Qualified requires all numeric requirements, including DSCR, to be explicitly
+known and satisfied. Plausible listings with missing financials, missing DSCR,
+or unresolved red flags remain Review. Known hard misses are Disqualified.
