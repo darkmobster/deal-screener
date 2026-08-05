@@ -1,48 +1,86 @@
-import os, json, re, time, smtplib
-from datetime import date
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+import email
+import hashlib
+import html
+import imaplib
+import json
+import os
+import re
+import sys
+import time
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from zoneinfo import ZoneInfo
+
 import requests
 from dotenv import load_dotenv
+
 from sources import get_sources
-from urllib.parse import quote_plus
 
 load_dotenv()
 
-# ── Load credentials from environment ──────────────────
-GITHUB_TOKEN        = os.environ.get("GITHUB_TOKEN")
-GITHUB_MODEL        = os.environ.get("GITHUB_MODEL", "openai/gpt-4.1")
-FIRECRAWL_KEY       = os.environ["FIRECRAWL_API_KEY"]
-AIRTABLE_API_KEY    = os.environ["AIRTABLE_API_KEY"]
-AIRTABLE_BASE_ID    = os.environ["AIRTABLE_BASE_ID"]
-AIRTABLE_TABLE_ID   = os.environ["AIRTABLE_DEALS_TABLE_ID"]
-GMAIL_USER          = os.environ["GMAIL_USER"]
-GMAIL_PASSWORD      = os.environ["GMAIL_APP_PASSWORD"]
-RECIPIENT_EMAIL     = os.environ.get("RECIPIENT_EMAIL", GMAIL_USER)
+EASTERN = ZoneInfo("America/New_York")
+EXPECTED_GMAIL = "kushagra.gv@gmail.com"
+DEALOS_BASE_URL = os.environ.get(
+    "DEALOS_BASE_URL", "https://kush-sba-deal-os.kgali01.chatgpt.site"
+).rstrip("/")
+ALERT_TERMS = (
+    "business for sale",
+    "listing alert",
+    "buyer match",
+    "search agent",
+    "cash flow",
+    "seller discretionary",
+    "sde",
+    "asking price",
+    "acquisition opportunity",
+    "bizbuysell",
+    "bizquest",
+    "dealstream",
+    "transworld",
+    "sunbelt",
+)
+TARGET_STATE_NAMES = (
+    "new jersey",
+    "new york",
+    "connecticut",
+    "massachusetts",
+    "maryland",
+    "california",
+)
+TARGET_STATE_ABBRS = ("NJ", "NY", "CT", "MA", "MD", "CA")
+FINANCIAL_TERMS = (
+    "$",
+    "asking",
+    "price",
+    "cash flow",
+    "sde",
+    "seller discretionary",
+    "ebitda",
+    "revenue",
+    "gross sales",
+)
+TRACKING_QUERY_PREFIXES = ("utm_", "mc_", "trk", "tracking")
 
-# ── Load buy-box from CLAUDE.md ─────────────────────────
-BUY_BOX = Path("CLAUDE.md").read_text()
 
-TARGET_CATEGORY_TERMS = [
-    "home inspection", "residential cleaning", "commercial cleaning",
-    "pest control", "moving", "storage", "appliance repair", "roofing",
-    "pool service", "security systems", "distribution", "logistics",
-    "gym", "fitness center", "health club", "bathhouse", "sauna",
-]
-
-TARGET_STATE_NAMES = ["california", "new jersey", "new york", "massachusetts", "virginia", "texas"]
-TARGET_STATE_ABBRS = ["CA", "NJ", "NY", "MA", "VA", "TX"]
-FINANCIAL_TERMS = [
-    "$", "asking", "price", "cash flow", "sde", "seller discretionary",
-    "ebitda", "revenue", "gross sales",
-]
+class IntegrationError(RuntimeError):
+    pass
 
 
-class ModelRateLimitError(Exception):
-    def __init__(self, retry_after=None):
-        self.retry_after = retry_after
-        super().__init__("GitHub Models rate limit reached")
+def required_env(name):
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise IntegrationError(f"Required environment value {name} is missing.")
+    return value
+
+
+def now_eastern():
+    return datetime.now(EASTERN)
+
+
+def iso_eastern(value=None):
+    return (value or now_eastern()).isoformat(timespec="seconds")
 
 
 def has_state_signal(text):
@@ -52,291 +90,416 @@ def has_state_signal(text):
     return any(re.search(rf"\b{abbr}\b", text, re.IGNORECASE) for abbr in TARGET_STATE_ABBRS)
 
 
-def should_score_source(text, source):
-    haystack = f"{source.get('url', '')} {text}"
-    lower = haystack.lower()
-    missing = []
-    if not any(term in lower for term in TARGET_CATEGORY_TERMS):
-        missing.append("target category")
-    if not has_state_signal(haystack):
-        missing.append("target state")
-    if not any(term in lower for term in FINANCIAL_TERMS):
-        missing.append("financial signal")
-    if missing:
-        print(f"  — Skipping model scoring; prefilter missing {', '.join(missing)}")
-        return False
-    return True
+def should_screen_source(text, source):
+    haystack = f"{source.get('url', '')} {source.get('source', '')} {text}"
+    has_financials = any(term in haystack.lower() for term in FINANCIAL_TERMS)
+    return has_financials and has_state_signal(haystack)
 
 
-def select_sources_for_run(sources):
-    total_shards = int(os.environ.get("SOURCE_SHARDS", "3"))
-    if total_shards <= 1:
-        return sources
-
-    explicit_shard = os.environ.get("SOURCE_SHARD")
-    if explicit_shard is not None:
-        shard = int(explicit_shard)
-    else:
-        weekday_to_shard = {0: 0, 2: 1, 4: 2}
-        today = date.today()
-        shard = weekday_to_shard.get(today.weekday(), today.toordinal())
-
-    shard = shard % total_shards
-    selected = [source for i, source in enumerate(sources) if i % total_shards == shard]
-    print(f"Source rotation: shard {shard + 1}/{total_shards}; checking {len(selected)} of {len(sources)} sources.")
-    return selected
-
-
-def scrape(source):
-    """Fetch a page using Firecrawl and return markdown text."""
+def scrape_source(session, source, firecrawl_key):
     try:
-        resp = requests.post(
+        response = session.post(
             "https://api.firecrawl.dev/v1/scrape",
-            headers={"Authorization": f"Bearer {FIRECRAWL_KEY}"},
+            headers={"Authorization": f"Bearer {firecrawl_key}"},
             json={
                 "url": source["url"],
                 "formats": ["markdown"],
                 "onlyMainContent": True,
-                "timeout": 30000,
+                "timeout": 45000,
             },
-            timeout=40,
+            timeout=60,
         )
-        if resp.status_code == 429:
-            print(f"FIRECRAWL CREDIT LIMIT REACHED — stopping scrape.")
-            return ""
-        if not resp.ok:
-            data = resp.json()
-            print(f"Firecrawl error {resp.status_code}: {data.get('error') or data.get('message') or resp.text[:200]}")
-            return ""
-        data = resp.json()
-        text = data.get("data", {}).get("markdown", "")
-        return text[:20000] if len(text) > 100 else ""
-    except Exception as e:
-        print(f"Scrape error {source['url']}: {e}")
-        return ""
+        if response.status_code == 429:
+            return "", "Firecrawl credit or rate limit reached", True
+        if not response.ok:
+            try:
+                data = response.json()
+                detail = data.get("error") or data.get("message")
+            except ValueError:
+                detail = response.text[:200]
+            return "", f"HTTP {response.status_code}: {detail or 'scrape failed'}", False
+        markdown = response.json().get("data", {}).get("markdown", "")
+        if len(markdown.strip()) < 100:
+            return "", "No usable listing content returned", False
+        return markdown[:60_000], None, False
+    except requests.RequestException as exc:
+        return "", f"Request failed: {exc.__class__.__name__}", False
 
 
-def score_listings(text, source_url):
-    """Send listing text to GitHub Models and get scores for all listings on the page."""
-    try:
-        if not GITHUB_TOKEN:
-            raise RuntimeError("GITHUB_TOKEN is required for GitHub Models inference.")
-
-        resp = requests.post(
-            "https://models.github.ai/inference/chat/completions",
-            headers={
-                "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {GITHUB_TOKEN}",
-                "Content-Type": "application/json",
-                "X-GitHub-Api-Version": "2026-03-10",
-            },
-            json={
-                "model": GITHUB_MODEL,
-                "max_tokens": 8000,
-                "response_format": {"type": "json_object"},
-                "messages": [
-                    {"role": "system", "content": BUY_BOX},
-                    {"role": "user", "content": f"Score every listing found on this page. Return a JSON object with a 'listings' array.\n\n{text}"},
-                ],
-            },
-            timeout=90,
-        )
-        if resp.status_code == 429:
-            raise ModelRateLimitError(resp.headers.get("Retry-After"))
-        if not resp.ok:
-            print(f"GitHub Models error {resp.status_code}: {resp.text[:500]}")
-            return []
-
-        raw = resp.json()["choices"][0]["message"]["content"]
-        parsed = json.loads(raw)
-        results = parsed.get("listings") if isinstance(parsed, dict) else parsed
-        if not isinstance(results, list):
-            match = re.search(r"\[[\s\S]*\]", raw)
-            results = json.loads(match.group()) if match else []
-        for r in results:
-            r["listing_url"] = r.get("listing_url") or source_url
-        return results
-    except ModelRateLimitError:
-        raise
-    except Exception as e:
-        print(f"Score error: {e}")
-    return []
+def github_headers(token):
+    return {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "x-github-repository": os.environ.get(
+            "GITHUB_REPOSITORY", "darkmobster/deal-screener"
+        ),
+        "x-github-event": os.environ.get("GITHUB_EVENT_NAME", "workflow_dispatch"),
+    }
 
 
-def save_to_airtable(deal):
-    """Save a deal to Airtable as a new record."""
-    green_flags = deal.get("green_flags", [])
-    red_flags   = deal.get("red_flags", []) + deal.get("mismatches", [])
-    try:
-        resp = requests.post(
-            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_ID}",
-            headers={
-                "Authorization": f"Bearer {AIRTABLE_API_KEY}",
-                "Content-Type":  "application/json",
-            },
-            json={"fields": {
-                "Deal Name":     deal.get("title", "Unknown"),
-                "Asking Price":  deal.get("asking_price", 0),
-                "SDE":           deal.get("sde", 0),
-                "Industry":      deal.get("industry", ""),
-                "State":         deal.get("state", ""),
-                "Broker Name":   deal.get("broker_name", ""),
-                "Source URL":    deal.get("listing_url", ""),
-                "Match Score":   deal.get("match_score", 0),
-                "Green Flags":   "\n".join(green_flags),
-                "Red Flags":     "\n".join(red_flags),
-                "Status":        "New - Review",
-                "Analysis Run":  False,
-                "Date Found":    date.today().isoformat(),
-            }},
-            timeout=15,
-        )
-        if not resp.ok:
-            print(f"Airtable error {resp.status_code}: {resp.text}")
-    except Exception as e:
-        print(f"Airtable error: {e}")
-
-
-def send_email(deals):
-    """Send the digest email."""
-    today = date.today().strftime("%B %d, %Y")
-    subject = f"Deal Screener: {len(deals)} new matches today" if deals else "Deal Screener: No matches today"
-
-    cards = ""
-    for d in deals:
-        price     = f"${d.get('asking_price', 0):,}"
-        sde       = f"${d.get('sde', 0):,}"
-        score     = d.get("match_score", 0)
-        source    = d.get("source_site", "Unknown source")
-        url       = d.get("listing_url", "#")
-        location  = d.get("location", "")
-
-        green_flags = d.get("green_flags", [])
-        red_flags   = d.get("red_flags", [])
-        mismatches  = d.get("mismatches", [])
-
-        green_html = ""
-        if green_flags:
-            items = "".join(f"<li>{f}</li>" for f in green_flags)
-            green_html = f"""
-            <div style="margin:10px 0 6px;">
-              <div style="font-size:11px;font-weight:600;color:#065f46;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">✓ Green flags</div>
-              <ul style="margin:0;padding-left:18px;color:#065f46;font-size:13px;line-height:1.7;">{items}</ul>
-            </div>"""
-
-        red_html = ""
-        all_red = red_flags + mismatches
-        if all_red:
-            items = "".join(f"<li>{f}</li>" for f in all_red)
-            red_html = f"""
-            <div style="margin:10px 0 6px;">
-              <div style="font-size:11px;font-weight:600;color:#991b1b;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">✗ Red flags / mismatches</div>
-              <ul style="margin:0;padding-left:18px;color:#991b1b;font-size:13px;line-height:1.7;">{items}</ul>
-            </div>"""
-
-        # Score color
-        if score >= 85:
-            score_bg = "#065f46"; score_color = "#ffffff"
-        elif score >= 70:
-            score_bg = "#1e40af"; score_color = "#ffffff"
-        else:
-            score_bg = "#991b1b"; score_color = "#ffffff"
-
-        cards += f"""
-        <div style="border:1px solid #e2e8f0;border-radius:12px;padding:20px 24px;margin-bottom:20px;background:#ffffff;">
-
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;">
-            <div style="flex:1;min-width:0;">
-              <div style="font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px;">{source}</div>
-              <h3 style="font-size:16px;font-weight:600;margin:0 0 3px;color:#111827;line-height:1.3;">{d.get('title', '')}</h3>
-              <div style="color:#6b7280;font-size:13px;">{location}</div>
-            </div>
-            <div style="flex-shrink:0;background:{score_bg};color:{score_color};width:52px;height:52px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;text-align:center;">
-              {score}%
-            </div>
-          </div>
-
-          <div style="display:flex;gap:24px;margin:14px 0 0;padding:12px 0;border-top:1px solid #f3f4f6;border-bottom:1px solid #f3f4f6;font-size:14px;color:#374151;">
-            <span><span style="color:#9ca3af;font-size:12px;">ASKING</span><br><strong>{price}</strong></span>
-            <span><span style="color:#9ca3af;font-size:12px;">SDE</span><br><strong>{sde}</strong></span>
-            <span><span style="color:#9ca3af;font-size:12px;">YEARS</span><br><strong>{d.get('years_in_business', '?')}</strong></span>
-          </div>
-
-          {green_html}
-          {red_html}
-
-          <div style="margin-top:14px;">
-            <a href="{url}" style="display:inline-block;background:#2563eb;color:white;padding:9px 20px;border-radius:8px;text-decoration:none;font-size:13px;font-weight:500;">View Listing →</a>
-          </div>
-
-        </div>"""
-
-    body = f"""<html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f9fafb;margin:0;padding:32px 16px;">
-    <div style="max-width:600px;margin:0 auto;">
-      <div style="margin-bottom:24px;">
-        <div style="font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">Deal Screener</div>
-        <h1 style="font-size:26px;font-weight:700;color:#111827;margin:0 0 4px;">{len(deals)} new matches today</h1>
-        <div style="color:#9ca3af;font-size:13px;">{today} · All scored ≥70/100</div>
-      </div>
-      {cards if cards else '<p style="color:#6b7280;">No listings matched today\'s criteria.</p>'}
-    </div>
-    </body></html>"""
-
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"]    = GMAIL_USER
-    msg["To"]      = RECIPIENT_EMAIL
-    msg.attach(MIMEText(body, "html"))
-
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-        server.login(GMAIL_USER, GMAIL_PASSWORD)
-        server.sendmail(GMAIL_USER, RECIPIENT_EMAIL, msg.as_string())
-    print(f"Email sent: {subject}")
-
-
-def main():
-    all_sources = get_sources()
-    sources = select_sources_for_run(all_sources)
-    print(f"Checking {len(sources)} sources...")
-    matches = []
-    seen_titles = set()
-
-    for i, source in enumerate(sources):
-        print(f"[{i+1}/{len(sources)}] {source['source']} — {source['url'][:60]}")
-        text = scrape(source)
-        if not text:
-            continue
-        if not should_score_source(text, source):
-            continue
-
+def screen_material(session, token, channel, source_name, source_url, material):
+    response = session.post(
+        f"{DEALOS_BASE_URL}/api/monitor-screen",
+        headers=github_headers(token),
+        json={
+            "channel": channel,
+            "sourceName": source_name,
+            "sourceUrl": source_url,
+            "material": material[:60_000],
+        },
+        timeout=120,
+    )
+    if not response.ok:
         try:
-            deals = score_listings(text, source["url"])
-        except ModelRateLimitError as e:
-            msg = "GitHub Models rate limit reached"
-            if e.retry_after:
-                msg += f"; retry after {e.retry_after} seconds"
-            print(f"  — {msg}. Stopping remaining source checks cleanly.")
-            break
-        if not deals:
-            print(f"  — No listings parsed")
+            detail = response.json().get("error")
+        except ValueError:
+            detail = response.text[:300]
+        raise IntegrationError(
+            f"DealOS screening returned HTTP {response.status_code}: {detail or 'unknown error'}"
+        )
+    candidates = response.json().get("candidates", [])
+    if not isinstance(candidates, list):
+        raise IntegrationError("DealOS screening returned an invalid candidates array.")
+    return candidates
+
+
+def plain_text_from_message(message):
+    plain_parts = []
+    html_parts = []
+    for part in message.walk() if message.is_multipart() else [message]:
+        if part.get_content_disposition() == "attachment":
             continue
+        content_type = part.get_content_type()
+        if content_type not in ("text/plain", "text/html"):
+            continue
+        payload = part.get_payload(decode=True)
+        if payload is None:
+            continue
+        charset = part.get_content_charset() or "utf-8"
+        text = payload.decode(charset, errors="replace")
+        if content_type == "text/plain":
+            plain_parts.append(text)
+        else:
+            html_parts.append(text)
+    if plain_parts:
+        return "\n".join(plain_parts)
+    raw_html = "\n".join(html_parts)
+    without_tags = re.sub(r"<[^>]+>", " ", raw_html)
+    return html.unescape(re.sub(r"\s+", " ", without_tags))
 
-        for deal in deals:
-            score = deal.get("match_score") or 0
-            title = (deal.get("title") or "").lower().strip()
 
-            if score >= 70 and title not in seen_titles and title:
-                seen_titles.add(title)
-                matches.append(deal)
-                save_to_airtable(deal)
-                print(f"  ✓ MATCH: {deal.get('title')} — score {score}")
-            else:
-                print(f"  — No match: {deal.get('title', 'unknown')} (score: {score})")
+def extract_urls(text):
+    return re.findall(r"https?://[^\s<>\"']+", text or "")[:20]
 
-        time.sleep(5)  # be polite to Firecrawl's free tier
 
-    send_email(matches)
-    print(f"Done. {len(matches)} matches found.")
+def source_name_from_email(sender, subject):
+    sender_match = re.search(r"@([A-Za-z0-9.-]+)", sender or "")
+    domain = sender_match.group(1).lower() if sender_match else ""
+    if domain:
+        return domain.removeprefix("mail.").removeprefix("email.")
+    return (subject or "Gmail listing alert")[:120]
+
+
+def fetch_gmail_alerts(since_at):
+    gmail_user = os.environ.get("GMAIL_USER", "").strip().lower()
+    gmail_password = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
+    if gmail_user != EXPECTED_GMAIL:
+        return "failed", [], f"Gmail account mismatch; expected {EXPECTED_GMAIL}"
+    if not gmail_password:
+        return "failed", [], "Gmail app password is missing"
+
+    messages = []
+    try:
+        with imaplib.IMAP4_SSL("imap.gmail.com", 993) as mailbox:
+            mailbox.login(gmail_user, gmail_password)
+            status, _ = mailbox.select("INBOX", readonly=True)
+            if status != "OK":
+                raise IntegrationError("Gmail inbox could not be opened read-only.")
+            since_day = since_at.astimezone(EASTERN).strftime("%d-%b-%Y")
+            status, data = mailbox.search(None, "SINCE", since_day)
+            if status != "OK":
+                raise IntegrationError("Gmail search failed.")
+            message_ids = data[0].split()[-100:]
+            for message_id in message_ids:
+                status, fetched = mailbox.fetch(message_id, "(RFC822)")
+                if status != "OK" or not fetched or not isinstance(fetched[0], tuple):
+                    continue
+                parsed = email.message_from_bytes(fetched[0][1])
+                subject = str(parsed.get("Subject", ""))
+                sender = str(parsed.get("From", ""))
+                body = plain_text_from_message(parsed)
+                haystack = f"{subject}\n{sender}\n{body}".lower()
+                if not any(term in haystack for term in ALERT_TERMS):
+                    continue
+                try:
+                    discovered = parsedate_to_datetime(str(parsed.get("Date", "")))
+                    if discovered.tzinfo is None:
+                        discovered = discovered.replace(tzinfo=timezone.utc)
+                except (TypeError, ValueError):
+                    discovered = now_eastern()
+                if discovered.astimezone(timezone.utc) < since_at.astimezone(timezone.utc):
+                    continue
+                urls = extract_urls(body)
+                messages.append(
+                    {
+                        "sourceName": source_name_from_email(sender, subject),
+                        "sourceUrl": urls[0] if urls else None,
+                        "externalId": str(parsed.get("Message-ID", "")).strip(),
+                        "discoveredAt": discovered.astimezone(EASTERN).isoformat(
+                            timespec="seconds"
+                        ),
+                        "material": (
+                            f"Subject: {subject}\nFrom: {sender}\n"
+                            f"Date: {discovered.isoformat()}\n\n{body}"
+                        )[:60_000],
+                    }
+                )
+        return "connected", messages, None
+    except (imaplib.IMAP4.error, OSError, IntegrationError) as exc:
+        return "failed", [], f"Gmail read failed: {exc}"
+
+
+def get_previous_successful_run(session):
+    try:
+        response = session.get(f"{DEALOS_BASE_URL}/api/workspace", timeout=30)
+        response.raise_for_status()
+        raw = response.json().get("emailMonitor", {}).get("lastCheckedAt")
+        if raw:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except (requests.RequestException, ValueError, TypeError):
+        pass
+    return now_eastern() - timedelta(days=7)
+
+
+def optional_number(value):
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)
+        return number if number >= 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def normalize_candidate(raw, channel, source_name, source_url, metadata=None):
+    metadata = metadata or {}
+    title = str(raw.get("title") or "").strip()
+    if not title:
+        return None
+    disposition = str(raw.get("disposition") or "review").lower()
+    if disposition not in {"qualified", "review", "disqualified"}:
+        disposition = "review"
+    broker_values = {
+        "name": str(raw.get("brokerName") or "").strip(),
+        "organization": str(raw.get("brokerOrganization") or "").strip(),
+        "email": str(raw.get("brokerEmail") or "").strip() or None,
+        "phone": str(raw.get("brokerPhone") or "").strip() or None,
+    }
+    broker = None
+    if any(broker_values.values()):
+        broker_values["name"] = broker_values["name"] or "Unknown broker"
+        broker_values["organization"] = (
+            broker_values["organization"] or source_name
+        )
+        broker = broker_values
+    confidence = optional_number(raw.get("confidence"))
+    return {
+        "externalId": str(
+            raw.get("externalId") or metadata.get("externalId") or ""
+        ).strip()
+        or None,
+        "channel": channel,
+        "sourceId": None,
+        "sourceName": source_name,
+        "canonicalUrl": str(raw.get("canonicalUrl") or source_url or "").strip()
+        or None,
+        "title": title,
+        "industry": str(raw.get("industry") or "Undisclosed").strip(),
+        "city": str(raw.get("city") or "Undisclosed").strip(),
+        "state": str(raw.get("state") or "NA").strip().upper()[:2],
+        "askingPrice": optional_number(raw.get("askingPrice")),
+        "revenue": optional_number(raw.get("revenue")),
+        "sde": optional_number(raw.get("sde")),
+        "dscr": optional_number(raw.get("dscr")),
+        "disposition": disposition,
+        "confidence": min(1.0, max(0.0, confidence if confidence is not None else 0.5)),
+        "greenFlags": [str(item).strip() for item in raw.get("greenFlags", []) if str(item).strip()],
+        "redFlags": [str(item).strip() for item in raw.get("redFlags", []) if str(item).strip()],
+        "dealBreakers": [str(item).strip() for item in raw.get("dealBreakers", []) if str(item).strip()],
+        "fitSummary": str(raw.get("fitSummary") or "Requires acquisition review.").strip(),
+        "discoveredAt": str(
+            raw.get("discoveredAt") or metadata.get("discoveredAt") or ""
+        ).strip()
+        or None,
+        "broker": broker,
+    }
+
+
+def canonicalize_url(url):
+    if not url:
+        return ""
+    try:
+        parts = urlsplit(url.strip())
+        query = [
+            (key, value)
+            for key, value in parse_qsl(parts.query, keep_blank_values=True)
+            if not key.lower().startswith(TRACKING_QUERY_PREFIXES)
+        ]
+        return urlunsplit(
+            (parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), urlencode(query), "")
+        )
+    except ValueError:
+        return url.strip().lower()
+
+
+def candidate_fingerprint(candidate):
+    canonical = canonicalize_url(candidate.get("canonicalUrl"))
+    if canonical:
+        return f"url:{canonical}"
+    title = re.sub(r"\s+", " ", candidate.get("title", "").strip().lower())
+    return "|".join(
+        [title, candidate.get("state", ""), str(candidate.get("askingPrice") or "")]
+    )
+
+
+def add_deduplicated(candidate, candidates, seen):
+    fingerprint = candidate_fingerprint(candidate)
+    if fingerprint in seen:
+        duplicate = dict(candidate)
+        duplicate["disposition"] = "duplicate"
+        duplicate["fitSummary"] = "Duplicate of another candidate in this monitor run."
+        candidates.append(duplicate)
+        return
+    seen.add(fingerprint)
+    candidates.append(candidate)
+
+
+def write_payload(payload, path="monitor-run.json"):
+    Path(path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def post_monitor_run(session, token, payload):
+    response = session.post(
+        f"{DEALOS_BASE_URL}/api/monitor-ingest",
+        headers=github_headers(token),
+        json=payload,
+        timeout=120,
+    )
+    if response.status_code not in (200, 201):
+        try:
+            detail = response.json().get("error")
+        except ValueError:
+            detail = response.text[:300]
+        raise IntegrationError(
+            f"DealOS ingestion returned HTTP {response.status_code}: {detail or 'unknown error'}"
+        )
+    return response.json()
+
+
+def run():
+    token = required_env("GITHUB_TOKEN")
+    firecrawl_key = required_env("FIRECRAWL_API_KEY")
+    started = now_eastern()
+    run_id = f"github-actions-{os.environ.get('GITHUB_RUN_ID') or hashlib.sha256(started.isoformat().encode()).hexdigest()[:16]}"
+    session = requests.Session()
+    previous_run = get_previous_successful_run(session)
+    candidates = []
+    seen = set()
+    sources_checked = []
+    sources_failed = []
+
+    gmail_status, alerts, gmail_error = fetch_gmail_alerts(previous_run)
+    if gmail_error:
+        sources_failed.append(gmail_error)
+    for alert in alerts[:50]:
+        source_name = alert["sourceName"]
+        sources_checked.append(f"Gmail: {source_name}")
+        try:
+            raw_candidates = screen_material(
+                session,
+                token,
+                "gmail",
+                source_name,
+                alert.get("sourceUrl"),
+                alert["material"],
+            )
+            for raw in raw_candidates:
+                candidate = normalize_candidate(
+                    raw, "gmail", source_name, alert.get("sourceUrl"), alert
+                )
+                if candidate:
+                    add_deduplicated(candidate, candidates, seen)
+        except IntegrationError as exc:
+            sources_failed.append(f"Gmail: {source_name} ({exc})")
+
+    for source in get_sources():
+        source_name = source["source"]
+        sources_checked.append(source_name)
+        material, scrape_error, stop_scraping = scrape_source(
+            session, source, firecrawl_key
+        )
+        if scrape_error:
+            sources_failed.append(f"{source_name}: {scrape_error}")
+            if stop_scraping:
+                break
+            continue
+        if not should_screen_source(material, source):
+            continue
+        try:
+            raw_candidates = screen_material(
+                session,
+                token,
+                "website",
+                source_name,
+                source["url"],
+                material,
+            )
+            for raw in raw_candidates:
+                candidate = normalize_candidate(
+                    raw, "website", source_name, source["url"]
+                )
+                if candidate:
+                    add_deduplicated(candidate, candidates, seen)
+        except IntegrationError as exc:
+            sources_failed.append(f"{source_name}: {exc}")
+        time.sleep(1)
+
+    completed = now_eastern()
+    counts = {
+        status: sum(1 for item in candidates if item["disposition"] == status)
+        for status in ("qualified", "review", "disqualified", "duplicate")
+    }
+    status = "partial" if sources_failed else "completed"
+    payload = {
+        "runId": run_id,
+        "startedAt": iso_eastern(started),
+        "completedAt": iso_eastern(completed),
+        "status": status,
+        "gmailStatus": gmail_status,
+        "gmailAccount": EXPECTED_GMAIL,
+        "sourcesChecked": list(dict.fromkeys(sources_checked)),
+        "sourcesFailed": sources_failed,
+        "summary": (
+            f"GitHub Actions screened Gmail and {len(sources_checked)} source checks. "
+            f"Results: {counts['qualified']} qualified, {counts['review']} review, "
+            f"{counts['disqualified']} disqualified, {counts['duplicate']} duplicate."
+        ),
+        "candidates": candidates,
+    }
+    write_payload(payload)
+    result = post_monitor_run(session, token, payload)
+    print(
+        "DealOS ingestion succeeded: "
+        f"runId={result.get('runId')} qualified={counts['qualified']} "
+        f"review={counts['review']} disqualified={counts['disqualified']} "
+        f"duplicates={counts['duplicate']}"
+    )
+    return result
+
 
 if __name__ == "__main__":
-    main()
+    try:
+        run()
+    except Exception as exc:
+        print(f"Deal screener failed: {exc}", file=sys.stderr)
+        sys.exit(1)
