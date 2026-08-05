@@ -1,33 +1,43 @@
-name: Deal Screener
+name: DealOS Source Monitor
 
 on:
   schedule:
-    - cron: "0 13 * * 1,3,5"
+    - cron: "0 8 * * 1,3"
+      timezone: "America/New_York"
   workflow_dispatch:
 
 permissions:
   contents: read
-  models: read
+
+concurrency:
+  group: dealos-source-monitor
+  cancel-in-progress: false
 
 jobs:
-  run:
+  monitor:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4.2.2
-      - uses: actions/setup-python@v5.6.0
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+          cache: pip
       - name: Install packages
         run: pip install -r requirements.txt
-      - name: Run screener
+      - name: Run DealOS monitor
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_MODEL: openai/gpt-4.1
-          SOURCE_SHARDS: 3
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
-          AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
-          AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
-          AIRTABLE_DEALS_TABLE_ID: ${{ secrets.AIRTABLE_DEALS_TABLE_ID }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          DEALOS_BASE_URL: https://kush-sba-deal-os.kgali01.chatgpt.site
         run: python screener.py
+      - name: Retain failed monitor payload
+        if: failure() && hashFiles('monitor-run.json') != ''
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: dealos-monitor-payload-${{ github.run_id }}
+          path: monitor-run.json
+          if-no-files-found: ignore
+          retention-days: 14
