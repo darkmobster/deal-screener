@@ -1,3 +1,4 @@
+
 import email
 import hashlib
 import html
@@ -62,6 +63,9 @@ FINANCIAL_TERMS = (
     "gross sales",
 )
 TRACKING_QUERY_PREFIXES = ("utm_", "mc_", "trk", "tracking")
+SCREEN_TIMEOUT_SECONDS = 120
+INGEST_TIMEOUT_SECONDS = 180
+INGEST_ATTEMPTS = 3
 
 
 class IntegrationError(RuntimeError):
@@ -138,17 +142,26 @@ def github_headers(token):
 
 
 def screen_material(session, token, channel, source_name, source_url, material):
-    response = session.post(
-        f"{DEALOS_BASE_URL}/api/monitor-screen",
-        headers=github_headers(token),
-        json={
-            "channel": channel,
-            "sourceName": source_name,
-            "sourceUrl": source_url,
-            "material": material[:60_000],
-        },
-        timeout=120,
-    )
+    try:
+        response = session.post(
+            f"{DEALOS_BASE_URL}/api/monitor-screen",
+            headers=github_headers(token),
+            json={
+                "channel": channel,
+                "sourceName": source_name,
+                "sourceUrl": source_url,
+                "material": material[:60_000],
+            },
+            timeout=SCREEN_TIMEOUT_SECONDS,
+        )
+    except requests.Timeout as exc:
+        raise IntegrationError(
+            f"DealOS screening timed out after {SCREEN_TIMEOUT_SECONDS} seconds"
+        ) from exc
+    except requests.RequestException as exc:
+        raise IntegrationError(
+            f"DealOS screening request failed: {exc.__class__.__name__}"
+        ) from exc
     if not response.ok:
         try:
             detail = response.json().get("error")
@@ -379,21 +392,38 @@ def write_payload(payload, path="monitor-run.json"):
 
 
 def post_monitor_run(session, token, payload):
-    response = session.post(
-        f"{DEALOS_BASE_URL}/api/monitor-ingest",
-        headers=github_headers(token),
-        json=payload,
-        timeout=120,
-    )
-    if response.status_code not in (200, 201):
+    last_error = "DealOS ingestion failed without a response."
+    for attempt in range(1, INGEST_ATTEMPTS + 1):
         try:
-            detail = response.json().get("error")
-        except ValueError:
-            detail = response.text[:300]
-        raise IntegrationError(
-            f"DealOS ingestion returned HTTP {response.status_code}: {detail or 'unknown error'}"
-        )
-    return response.json()
+            response = session.post(
+                f"{DEALOS_BASE_URL}/api/monitor-ingest",
+                headers=github_headers(token),
+                json=payload,
+                timeout=INGEST_TIMEOUT_SECONDS,
+            )
+            if response.status_code in (200, 201):
+                return response.json()
+            try:
+                detail = response.json().get("error")
+            except ValueError:
+                detail = response.text[:300]
+            last_error = (
+                f"DealOS ingestion returned HTTP {response.status_code}: "
+                f"{detail or 'unknown error'}"
+            )
+        except requests.Timeout:
+            last_error = (
+                f"DealOS ingestion timed out after {INGEST_TIMEOUT_SECONDS} seconds"
+            )
+        except requests.RequestException as exc:
+            last_error = (
+                f"DealOS ingestion request failed: {exc.__class__.__name__}"
+            )
+        if attempt < INGEST_ATTEMPTS:
+            time.sleep(2**attempt)
+    raise IntegrationError(
+        f"{last_error} after {INGEST_ATTEMPTS} attempts; retain the payload for retry."
+    )
 
 
 def run():
@@ -402,6 +432,20 @@ def run():
     started = now_eastern()
     run_id = f"github-actions-{os.environ.get('GITHUB_RUN_ID') or hashlib.sha256(started.isoformat().encode()).hexdigest()[:16]}"
     session = requests.Session()
+    write_payload(
+        {
+            "runId": run_id,
+            "startedAt": iso_eastern(started),
+            "completedAt": iso_eastern(started),
+            "status": "partial",
+            "gmailStatus": "pending",
+            "gmailAccount": EXPECTED_GMAIL,
+            "sourcesChecked": [],
+            "sourcesFailed": ["The run did not reach final payload generation."],
+            "summary": "Run started; this checkpoint is retained only if execution fails.",
+            "candidates": [],
+        }
+    )
     previous_run = get_previous_successful_run(session)
     candidates = []
     seen = set()
@@ -411,9 +455,14 @@ def run():
     gmail_status, alerts, gmail_error = fetch_gmail_alerts(previous_run)
     if gmail_error:
         sources_failed.append(gmail_error)
-    for alert in alerts[:50]:
+    selected_alerts = alerts[:50]
+    for alert_index, alert in enumerate(selected_alerts, start=1):
         source_name = alert["sourceName"]
         sources_checked.append(f"Gmail: {source_name}")
+        print(
+            f"[gmail {alert_index}/{len(selected_alerts)}] "
+            f"Screening {source_name}"
+        )
         try:
             raw_candidates = screen_material(
                 session,
@@ -430,16 +479,25 @@ def run():
                 if candidate:
                     add_deduplicated(candidate, candidates, seen)
         except IntegrationError as exc:
-            sources_failed.append(f"Gmail: {source_name} ({exc})")
+            failure = f"Gmail: {source_name} ({exc})"
+            sources_failed.append(failure)
+            print(f"  Partial source failure: {failure}")
 
-    for source in get_sources():
+    listing_sources = get_sources()
+    for source_index, source in enumerate(listing_sources, start=1):
         source_name = source["source"]
         sources_checked.append(source_name)
+        print(
+            f"[source {source_index}/{len(listing_sources)}] "
+            f"Collecting {source_name}"
+        )
         material, scrape_error, stop_scraping = scrape_source(
             session, source, firecrawl_key
         )
         if scrape_error:
-            sources_failed.append(f"{source_name}: {scrape_error}")
+            failure = f"{source_name}: {scrape_error}"
+            sources_failed.append(failure)
+            print(f"  Partial source failure: {failure}")
             if stop_scraping:
                 break
             continue
@@ -461,7 +519,9 @@ def run():
                 if candidate:
                     add_deduplicated(candidate, candidates, seen)
         except IntegrationError as exc:
-            sources_failed.append(f"{source_name}: {exc}")
+            failure = f"{source_name}: {exc}"
+            sources_failed.append(failure)
+            print(f"  Partial source failure: {failure}")
         time.sleep(1)
 
     completed = now_eastern()
@@ -503,3 +563,4 @@ if __name__ == "__main__":
     except Exception as exc:
         print(f"Deal screener failed: {exc}", file=sys.stderr)
         sys.exit(1)
+

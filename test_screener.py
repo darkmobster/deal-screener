@@ -1,15 +1,59 @@
+
 import unittest
 
+import requests
+
 from screener import (
+    IntegrationError,
     add_deduplicated,
     candidate_fingerprint,
     canonicalize_url,
     normalize_candidate,
+    post_monitor_run,
+    screen_material,
     should_screen_source,
 )
 
 
 class ScreenerTests(unittest.TestCase):
+    def test_screen_timeout_becomes_a_source_level_integration_error(self):
+        class TimeoutSession:
+            def post(self, *args, **kwargs):
+                raise requests.ReadTimeout("slow DealOS screening response")
+
+        with self.assertRaisesRegex(IntegrationError, "screening timed out"):
+            screen_material(
+                TimeoutSession(),
+                "github-token",
+                "website",
+                "Slow Broker",
+                "https://example.com/listings",
+                "New Jersey business asking $1,000,000",
+            )
+
+    def test_ingestion_retries_transient_timeout_with_same_payload(self):
+        class SuccessfulResponse:
+            status_code = 201
+
+            def json(self):
+                return {"runId": "github-actions-123"}
+
+        class RetrySession:
+            def __init__(self):
+                self.calls = []
+
+            def post(self, *args, **kwargs):
+                self.calls.append(kwargs["json"])
+                if len(self.calls) == 1:
+                    raise requests.ReadTimeout("slow ingestion response")
+                return SuccessfulResponse()
+
+        session = RetrySession()
+        payload = {"runId": "github-actions-123", "candidates": []}
+        result = post_monitor_run(session, "github-token", payload)
+        self.assertEqual(result["runId"], payload["runId"])
+        self.assertEqual(session.calls, [payload, payload])
+
     def test_prefilter_requires_state_and_financial_signal(self):
         source = {"source": "Broker", "url": "https://example.com/listings"}
         self.assertTrue(
@@ -66,3 +110,4 @@ class ScreenerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
