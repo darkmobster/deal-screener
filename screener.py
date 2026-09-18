@@ -351,6 +351,16 @@ def normalize_candidate(raw, channel, source_name, source_url, metadata=None):
         "redFlags": [str(item).strip() for item in raw.get("redFlags", []) if str(item).strip()],
         "dealBreakers": [str(item).strip() for item in raw.get("dealBreakers", []) if str(item).strip()],
         "fitSummary": str(raw.get("fitSummary") or "Requires acquisition review.").strip(),
+        "originContactName": (
+            str(metadata.get("senderName") or "").strip() or None
+            if channel == "gmail"
+            else None
+        ),
+        "originContactEmail": (
+            str(metadata.get("senderEmail") or "").strip().lower() or None
+            if channel == "gmail"
+            else None
+        ),
         "discoveredAt": str(
             raw.get("discoveredAt") or metadata.get("discoveredAt") or ""
         ).strip()
