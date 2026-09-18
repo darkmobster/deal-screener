@@ -9,7 +9,7 @@ import re
 import sys
 import time
 from datetime import datetime, timedelta, timezone
-from email.utils import parsedate_to_datetime
+from email.utils import parseaddr, parsedate_to_datetime
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
@@ -240,6 +240,7 @@ def fetch_gmail_alerts(since_at):
                 parsed = email.message_from_bytes(fetched[0][1])
                 subject = str(parsed.get("Subject", ""))
                 sender = str(parsed.get("From", ""))
+                sender_name, sender_email = parseaddr(sender)
                 body = plain_text_from_message(parsed)
                 haystack = f"{subject}\n{sender}\n{body}".lower()
                 if not any(term in haystack for term in ALERT_TERMS):
@@ -256,6 +257,8 @@ def fetch_gmail_alerts(since_at):
                 messages.append(
                     {
                         "sourceName": source_name_from_email(sender, subject),
+                        "senderName": sender_name or sender_email or "Unknown sender",
+                        "senderEmail": sender_email.lower() or None,
                         "sourceUrl": urls[0] if urls else None,
                         "externalId": str(parsed.get("Message-ID", "")).strip(),
                         "discoveredAt": discovered.astimezone(EASTERN).isoformat(
@@ -303,9 +306,17 @@ def normalize_candidate(raw, channel, source_name, source_url, metadata=None):
     if disposition not in {"qualified", "review", "disqualified"}:
         disposition = "review"
     broker_values = {
-        "name": str(raw.get("brokerName") or "").strip(),
+        "name": str(
+            raw.get("brokerName")
+            or (metadata.get("senderName") if channel == "gmail" else "")
+            or ""
+        ).strip(),
         "organization": str(raw.get("brokerOrganization") or "").strip(),
-        "email": str(raw.get("brokerEmail") or "").strip() or None,
+        "email": str(
+            raw.get("brokerEmail")
+            or (metadata.get("senderEmail") if channel == "gmail" else "")
+            or ""
+        ).strip().lower() or None,
         "phone": str(raw.get("brokerPhone") or "").strip() or None,
     }
     broker = None

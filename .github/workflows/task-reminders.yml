@@ -1,22 +1,21 @@
-name: DealOS Source Monitor
+name: DealOS Task Reminders
 
 on:
   schedule:
-    - cron: "0 8 * * 1-5"
-      timezone: "America/New_York"
+    - cron: "15 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: dealos-source-monitor
+  group: dealos-task-reminders
   cancel-in-progress: false
 
 jobs:
-  monitor:
+  remind:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -25,19 +24,11 @@ jobs:
           cache: pip
       - name: Install packages
         run: pip install -r requirements.txt
-      - name: Run DealOS monitor
+      - name: Send due-task reminders
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          TASK_REMINDER_TO: kushagra.gv@gmail.com
           DEALOS_BASE_URL: https://kush-sba-deal-os.kgali01.chatgpt.site
-        run: python screener.py
-      - name: Retain failed monitor payload
-        if: failure() && hashFiles('monitor-run.json') != ''
-        uses: actions/upload-artifact@v4.6.2
-        with:
-          name: dealos-monitor-payload-${{ github.run_id }}
-          path: monitor-run.json
-          if-no-files-found: ignore
-          retention-days: 14
+        run: python task_reminders.py
